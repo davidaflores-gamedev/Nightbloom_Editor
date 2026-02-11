@@ -3,208 +3,12 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
+#include <unordered_map>
+#include <functional>
 
 namespace Nightbloom
 {
-	// ============================================================================
-	// ShaderNode Base Class
-	// ============================================================================
-
-	ShaderNode::ShaderNode(const std::string& name, int id)
-		: name(name), id(id), position(100, 100), size(150, 100) {
-	}
-
-	std::string ShaderNode::GetOutputVariable(int outputIndex) const {
-		return "node" + std::to_string(id) + "_out" + std::to_string(outputIndex);
-	}
-
-	void ShaderNode::AddInputPin(const std::string& pinName, PinType type) {
-		NodePin pin;
-		pin.name = pinName;
-		pin.type = type;
-		pin.isInput = true;
-		pin.nodeId = id;
-		pin.pinId = static_cast<int>(inputPins.size());
-		inputPins.push_back(pin);
-	}
-
-	void ShaderNode::AddOutputPin(const std::string& pinName, PinType type) {
-		NodePin pin;
-		pin.name = pinName;
-		pin.type = type;
-		pin.isInput = false;
-		pin.nodeId = id;
-		pin.pinId = static_cast<int>(outputPins.size());
-		outputPins.push_back(pin);
-	}
-
-	// ============================================================================
-	// Concrete Node Implementations
-	// ============================================================================
-
-	TextureNode::TextureNode(int id) : ShaderNode("Texture", id) {
-		AddOutputPin("Color", PinType::Vec4);
-		AddOutputPin("R", PinType::Float);
-		AddOutputPin("G", PinType::Float);
-		AddOutputPin("B", PinType::Float);
-		AddOutputPin("A", PinType::Float);
-		size = ImVec2(140, 120);
-	}
-
-	std::string TextureNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::stringstream ss;
-		ss << "vec4 " << GetOutputVariable(0) << " = texture(texture" << textureSlot << ", fragTexCoord);\n";
-		ss << "float " << GetOutputVariable(1) << " = " << GetOutputVariable(0) << ".r;\n";
-		ss << "float " << GetOutputVariable(2) << " = " << GetOutputVariable(0) << ".g;\n";
-		ss << "float " << GetOutputVariable(3) << " = " << GetOutputVariable(0) << ".b;\n";
-		ss << "float " << GetOutputVariable(4) << " = " << GetOutputVariable(0) << ".a;\n";
-		return ss.str();
-	}
-
-	void TextureNode::DrawProperties() {
-		ImGui::DragInt("Slot", &textureSlot, 0.1f, 0, 7);
-	}
-
-	ColorNode::ColorNode(int id) : ShaderNode("Color", id) {
-		AddOutputPin("RGBA", PinType::Vec4);
-		AddOutputPin("RGB", PinType::Vec3);
-		size = ImVec2(140, 100);
-	}
-
-	std::string ColorNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::stringstream ss;
-		ss << "vec4 " << GetOutputVariable(0) << " = vec4("
-			<< color[0] << ", " << color[1] << ", " << color[2] << ", " << color[3] << ");\n";
-		ss << "vec3 " << GetOutputVariable(1) << " = " << GetOutputVariable(0) << ".rgb;\n";
-		return ss.str();
-	}
-
-	void ColorNode::DrawProperties() {
-		ImGui::ColorEdit4("Color", color);
-	}
-
-	TimeNode::TimeNode(int id) : ShaderNode("Time", id) {
-		AddOutputPin("Time", PinType::Float);
-		AddOutputPin("Sin", PinType::Float);
-		AddOutputPin("Cos", PinType::Float);
-		size = ImVec2(120, 90);
-	}
-
-	std::string TimeNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::stringstream ss;
-		ss << "float " << GetOutputVariable(0) << " = time;\n";
-		ss << "float " << GetOutputVariable(1) << " = sin(time);\n";
-		ss << "float " << GetOutputVariable(2) << " = cos(time);\n";
-		return ss.str();
-	}
-
-	MultiplyNode::MultiplyNode(int id) : ShaderNode("Multiply", id) {
-		AddInputPin("A", PinType::Vec4);
-		AddInputPin("B", PinType::Vec4);
-		AddOutputPin("Result", PinType::Vec4);
-		size = ImVec2(120, 80);
-	}
-
-	std::string MultiplyNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::stringstream ss;
-
-		// Get input connections
-		std::string inputA = "vec4(1.0)";
-		std::string inputB = "vec4(1.0)";
-
-		if (inputPins[0].connectedTo >= 0) {
-			// Find the connected node and pin
-			for (const auto& conn : graph->connections) {
-				if (conn.endNode == id && conn.endPin == 0) {
-					const ShaderNode* srcNode = graph->GetNode(conn.startNode);
-					if (srcNode) {
-						inputA = srcNode->GetOutputVariable(conn.startPin);
-					}
-					break;
-				}
-			}
-		}
-
-		if (inputPins[1].connectedTo >= 0) {
-			for (const auto& conn : graph->connections) {
-				if (conn.endNode == id && conn.endPin == 1) {
-					const ShaderNode* srcNode = graph->GetNode(conn.startNode);
-					if (srcNode) {
-						inputB = srcNode->GetOutputVariable(conn.startPin);
-					}
-					break;
-				}
-			}
-		}
-
-		ss << "vec4 " << GetOutputVariable(0) << " = " << inputA << " * " << inputB << ";\n";
-		return ss.str();
-	}
-
-	AddNode::AddNode(int id) : ShaderNode("Add", id) {
-		AddInputPin("A", PinType::Vec4);
-		AddInputPin("B", PinType::Vec4);
-		AddOutputPin("Result", PinType::Vec4);
-		size = ImVec2(120, 80);
-	}
-
-	std::string AddNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::stringstream ss;
-
-		std::string inputA = "vec4(0.0)";
-		std::string inputB = "vec4(0.0)";
-
-		if (inputPins[0].connectedTo >= 0) {
-			for (const auto& conn : graph->connections) {
-				if (conn.endNode == id && conn.endPin == 0) {
-					const ShaderNode* srcNode = graph->GetNode(conn.startNode);
-					if (srcNode) {
-						inputA = srcNode->GetOutputVariable(conn.startPin);
-					}
-					break;
-				}
-			}
-		}
-
-		if (inputPins[1].connectedTo >= 0) {
-			for (const auto& conn : graph->connections) {
-				if (conn.endNode == id && conn.endPin == 1) {
-					const ShaderNode* srcNode = graph->GetNode(conn.startNode);
-					if (srcNode) {
-						inputB = srcNode->GetOutputVariable(conn.startPin);
-					}
-					break;
-				}
-			}
-		}
-
-		ss << "vec4 " << GetOutputVariable(0) << " = " << inputA << " + " << inputB << ";\n";
-		return ss.str();
-	}
-
-	FragmentOutputNode::FragmentOutputNode(int id) : ShaderNode("Output", id) {
-		AddInputPin("Color", PinType::Vec4);
-		size = ImVec2(120, 60);
-	}
-
-	std::string FragmentOutputNode::GenerateGLSL(const ShaderGraph* graph) const {
-		std::string inputColor = "vec4(1.0, 0.0, 1.0, 1.0)"; // Default purple
-
-		if (inputPins[0].connectedTo >= 0) {
-			for (const auto& conn : graph->connections) {
-				if (conn.endNode == id && conn.endPin == 0) {
-					const ShaderNode* srcNode = graph->GetNode(conn.startNode);
-					if (srcNode) {
-						inputColor = srcNode->GetOutputVariable(conn.startPin);
-					}
-					break;
-				}
-			}
-		}
-
-		return "outColor = " + inputColor + ";\n";
-	}
-
 	// ============================================================================
 	// ShaderGraph
 	// ============================================================================
@@ -325,23 +129,48 @@ namespace Nightbloom
 		}
 	}
 
+	// UpdateInfo Must be ran before generating shader code
 	std::string ShaderGraph::GenerateFragmentShader() const {
 		std::stringstream ss;
 
 		ss << "#version 450\n\n";
+
+
+
+
+		if (usesTextures)
+		{
+			ss << "layout(set = 1, binding = 0) uniform sampler2D diffuseTexture;\n\n";
+		}
+
 		ss << "layout(location = 0) in vec3 fragColor;\n";
 		ss << "layout(location = 1) in vec2 fragTexCoord;\n\n";
 		ss << "layout(location = 0) out vec4 outColor;\n\n";
-		ss << "layout(push_constant) uniform PushConstants {\n";
-		ss << "    float time;\n";
-		ss << "} push;\n\n";
-		ss << "void main() {\n";
-		ss << "    float time = push.time;\n\n";
 
-		// Generate code for each node in dependency order
-		// Simple approach: just generate all nodes except output first
-		for (const auto& node : nodes) {
-			if (dynamic_cast<FragmentOutputNode*>(node.get()) == nullptr) {
+				// Uniform buffer for frame data
+		ss << "layout(set = 0, binding = 0) uniform FrameUniforms {\n";
+		ss << "    mat4 view;\n";
+		ss << "    mat4 proj;\n";
+		ss << "    vec4 time;\n";
+		ss << "	   vec4 cameraPos;\n";
+		ss << "} frame;\n\n";
+
+		// Push constants for per-object data
+		ss << "layout(push_constant) uniform PushConstants {\n";
+		ss << "    mat4 model;\n";
+		ss << "    vec4 customData;\n";
+		ss << "} push;\n\n";
+		
+		ss << "void main() {\n";
+		ss << "    float time = frame.time.x;\n\n";
+
+		// Get nodes in dependency order
+		std::vector<int> sortedNodeIds = GetTopologicalSort();
+
+		// Generate code in correct order
+		for (int nodeId : sortedNodeIds) {
+			ShaderNode* node = const_cast<ShaderNode*>(GetNode(nodeId));
+			if (node && dynamic_cast<FragmentOutputNode*>(node) == nullptr) {
 				ss << "    // " << node->name << " (Node " << node->id << ")\n";
 				ss << "    " << node->GenerateGLSL(this) << "\n";
 			}
@@ -356,31 +185,120 @@ namespace Nightbloom
 		}
 
 		ss << "}\n";
-
 		return ss.str();
+	}
+
+	std::vector<int> ShaderGraph::GetTopologicalSort() const {
+		std::vector<int> result;
+		std::unordered_set<int> visited;
+		std::unordered_set<int> visiting;
+
+		// Build adjacency list (what nodes does each node depend on)
+		std::unordered_map<int, std::vector<int>> dependencies;
+		for (const auto& conn : connections) {
+			dependencies[conn.endNode].push_back(conn.startNode);
+		}
+
+		// DFS helper
+		std::function<void(int)> visit = [&](int nodeId) {
+			if (visited.count(nodeId)) return;
+			if (visiting.count(nodeId)) {
+				// Cycle detected - shouldn't happen with proper UI
+				return;
+			}
+
+			visiting.insert(nodeId);
+
+			// Visit dependencies first
+			if (dependencies.count(nodeId)) {
+				for (int dep : dependencies[nodeId]) {
+					visit(dep);
+				}
+			}
+
+			visiting.erase(nodeId);
+			visited.insert(nodeId);
+			result.push_back(nodeId);
+			};
+
+		// Visit all nodes
+		for (const auto& node : nodes) {
+			visit(node->id);
+		}
+
+		return result;
 	}
 
 	std::string ShaderGraph::GenerateVertexShader() const {
 		// For now, use a standard vertex shader
 		std::stringstream ss;
 		ss << "#version 450\n\n";
+
+		// Uniform buffer for frame data
+		ss << "layout(set = 0, binding = 0) uniform FrameUniforms {\n";
+		ss << "    mat4 view;\n";
+		ss << "    mat4 proj;\n";
+		ss << "    vec4 time;\n";
+		ss << "	   vec4 cameraPos;\n";
+		ss << "} frame;\n\n";
+
+		// Push constants for per-object data
+		ss << "layout(push_constant) uniform PushConstants {\n";
+		ss << "    mat4 model;\n";
+		ss << "    vec4 customData;\n";
+		ss << "} push;\n\n";
+
 		ss << "layout(location = 0) in vec3 inPosition;\n";
 		ss << "layout(location = 1) in vec3 inColor;\n";
 		ss << "layout(location = 2) in vec2 inTexCoord;\n\n";
 		ss << "layout(location = 0) out vec3 fragColor;\n";
 		ss << "layout(location = 1) out vec2 fragTexCoord;\n\n";
-		ss << "layout(push_constant) uniform PushConstants {\n";
-		ss << "    mat4 model;\n";
-		ss << "    mat4 view;\n";
-		ss << "    mat4 proj;\n";
-		ss << "} push;\n\n";
+
 		ss << "void main() {\n";
-		ss << "    gl_Position = push.proj * push.view * push.model * vec4(inPosition, 1.0);\n";
+		ss << "    gl_Position = frame.proj * frame.view * push.model * vec4(inPosition, 1.0);\n";
 		ss << "    fragColor = inColor;\n";
 		ss << "    fragTexCoord = inTexCoord;\n";
 		ss << "}\n";
 
 		return ss.str();
+	}
+
+	void ShaderGraph::RefreshShaderInfo()
+	{
+		usesTextures = false;
+		for (const auto& node : nodes) {
+			if (dynamic_cast<TextureNode*>(node.get()) != nullptr) {
+				usesTextures = true;
+				
+				for (auto& pin : node->outputPins) {
+					pin.resolvedType = pin.type;
+				}
+			}
+		}
+
+		ResolveAllTypes();
+	}
+
+	void ShaderGraph::ResolveAllTypes()
+	{
+		// Multiple passes to propagate types through the graph
+		bool changed = true;
+		int passes = 0;
+		while (changed && passes < 10) {
+			changed = false;
+			for (auto& node : nodes) {
+				PinType oldType = node->outputPins.empty() ?
+					PinType::Float : node->outputPins[0].resolvedType;
+
+				node->ResolveTypes(this);
+
+				if (!node->outputPins.empty() &&
+					node->outputPins[0].resolvedType != oldType) {
+					changed = true;
+				}
+			}
+			passes++;
+		}
 	}
 
 	// ============================================================================
@@ -402,7 +320,19 @@ namespace Nightbloom
 	ShaderNodeEditor::~ShaderNodeEditor() = default;
 
 	void ShaderNodeEditor::Draw(const char* title, bool* p_open) {
-		ImGui::Begin(title, p_open, ImGuiWindowFlags_MenuBar);
+
+		// Give the window a sensible first-time size and a hard minimum.
+		ImGui::SetNextWindowSize(ImVec2(720, 480), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(200, 150), ImVec2(FLT_MAX, FLT_MAX));
+
+		// Request a menubar
+		bool window_visible = ImGui::Begin(title, p_open, ImGuiWindowFlags_MenuBar);
+
+		// If the window is collapsed/hidden this frame, skip all content but still End().
+		if (!window_visible) {
+			ImGui::End();
+			return;
+		}
 
 		// Menu bar
 		if (ImGui::BeginMenuBar()) {
@@ -422,9 +352,16 @@ namespace Nightbloom
 		}
 
 		// Canvas
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		ImVec2 canvasPos = ImGui::GetCursorScreenPos();
 		ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+
+		// Guard against zero/near-zero sizes (docking edges, first frame, tiny split).
+		const float kMinW = 32.0f, kMinH = 32.0f;
+		if (canvasSize.x < kMinW || canvasSize.y < kMinH) {
+			ImGui::TextUnformatted("Expand this window to use the graph.");
+			ImGui::End();
+			return;
+		}
 
 		// Create canvas region
 		ImGui::InvisibleButton("canvas", canvasSize,
@@ -432,23 +369,23 @@ namespace Nightbloom
 			ImGuiButtonFlags_MouseButtonRight |
 			ImGuiButtonFlags_MouseButtonMiddle);
 
+
 		const bool isHovered = ImGui::IsItemHovered();
 		const bool isActive = ImGui::IsItemActive();
+		ImVec2 canvasMin = ImGui::GetItemRectMin();
+		ImVec2 canvasMax = ImGui::GetItemRectMax();
 		const ImVec2 mousePos = ImGui::GetMousePos();
 
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
 		// Canvas background
-		drawList->AddRectFilled(canvasPos,
-			ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
-			IM_COL32(40, 40, 50, 255));
+		drawList->AddRectFilled(canvasMin, canvasMax, IM_COL32(40, 40, 50, 255));
 
 		// Draw grid
-		if (showGrid) {
-			DrawGrid(drawList, canvasPos, canvasSize);
-		}
+		if (showGrid) DrawGrid(drawList, canvasMin, ImVec2(canvasMax.x - canvasMin.x, canvasMax.y - canvasMin.y));
 
 		// Push clip rect for canvas
-		drawList->PushClipRect(canvasPos,
-			ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), true);
+		drawList->PushClipRect(canvasMin, canvasMax, true);
 
 		// Draw connections
 		DrawConnections(drawList, canvasPos);
@@ -573,10 +510,20 @@ namespace Nightbloom
 	}
 
 	void ShaderNodeEditor::DrawNodePin(ImDrawList* drawList, const NodePin& pin, const ImVec2& pinPos) {
-		ImU32 pinColor = GetPinColor(pin.type);
-		float radius = nodeSlotRadius;
+		ImU32 pinColor;
 
-		// Check if connected
+		// Show resolved type color if available, otherwise show gray for "any"
+		if (pin.resolvedType != PinType::Any) {
+			pinColor = GetPinColor(pin.resolvedType);
+		}
+		else if (pin.type != PinType::Any) {
+			pinColor = GetPinColor(pin.type);
+		}
+		else {
+			pinColor = IM_COL32(128, 128, 128, 255); // Gray for unresolved
+		}
+
+		float radius = nodeSlotRadius;
 		bool isConnected = pin.isInput ? (pin.connectedTo >= 0) : (!pin.connections.empty());
 
 		if (isConnected) {
@@ -735,6 +682,9 @@ namespace Nightbloom
 			if (ImGui::MenuItem("Add Add Node")) {
 				CreateNode("Add", nodePos);
 			}
+			if (ImGui::MenuItem("Add Mix Node")) {
+				CreateNode("Mix", nodePos);
+			}
 
 			ImGui::Separator();
 
@@ -765,6 +715,9 @@ namespace Nightbloom
 		else if (nodeType == "Add") {
 			newNode = std::make_unique<AddNode>(id);
 		}
+		else if (nodeType == "Mix") {
+			newNode = std::make_unique<MixNode>(id);
+		}
 
 		if (newNode) {
 			newNode->position = position;
@@ -781,6 +734,7 @@ namespace Nightbloom
 
 	bool ShaderNodeEditor::CompileShaders() {
 		try {
+			graph->RefreshShaderInfo();
 			vertexShaderCode = graph->GenerateVertexShader();
 			fragmentShaderCode = graph->GenerateFragmentShader();
 			return true;

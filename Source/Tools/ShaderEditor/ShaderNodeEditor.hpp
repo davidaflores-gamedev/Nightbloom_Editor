@@ -1,133 +1,9 @@
 #pragma once
 
-#include <imgui.h>
-#include <vector>
-#include <memory>
-#include <string>
-#include <unordered_map>
+#include "ShaderNode.hpp"
 
 namespace Nightbloom
 {
-
-	// Forward declarations
-	class ShaderNode;
-	class ShaderGraph;
-
-	// Pin types for node connections
-	enum class PinType
-	{
-		Float,
-		Vec2,
-		Vec3,
-		Vec4,
-		Texture2D,
-		Matrix4
-	};
-
-	// Visual style for pins
-	struct PinStyle {
-		ImU32 color;
-		float radius = 5.0f;
-	};
-
-	// Node pin (input/outpu)
-	struct NodePin
-	{
-		std::string name;
-		PinType type;
-		bool isInput;
-		int nodeId;
-		int pinId;
-
-		// For output pins - can connect to multiple inputs
-		std::vector<int> connections;
-
-		// For input pins - single connection
-		int connectedTo = -1;
-
-		ImVec2 pos; // Screen position for rendering
-	};
-
-	// Connection between two pins
-	struct NodeConnection {
-		int id;
-		int startNode;
-		int startPin;
-		int endNode;
-		int endPin;
-	};
-
-	// Base class for shader nodes
-	class ShaderNode {
-	public:
-		ShaderNode(const std::string& name, int id);
-		virtual ~ShaderNode() = default;
-
-		// Generate GLSL code for this node
-		virtual std::string GenerateGLSL(const ShaderGraph* graph) const = 0;
-
-		// Get variable name for this node's output
-		virtual std::string GetOutputVariable(int outputIndex = 0) const;
-
-		// UI
-		virtual void DrawProperties() {} // Override for custom properties
-
-		// Node data
-		std::string name;
-		int id;
-		ImVec2 position;
-		ImVec2 size;
-
-		std::vector<NodePin> inputPins;
-		std::vector<NodePin> outputPins;
-
-	protected:
-		void AddInputPin(const std::string& name, PinType type);
-		void AddOutputPin(const std::string& name, PinType type);
-	};
-
-	// Concrete node types
-	class TextureNode : public ShaderNode {
-	public:
-		TextureNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-		void DrawProperties() override;
-
-		int textureSlot = 0;
-	};
-
-	class ColorNode : public ShaderNode {
-	public:
-		ColorNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-		void DrawProperties() override;
-
-		float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-	};
-
-	class TimeNode : public ShaderNode {
-	public:
-		TimeNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-	};
-
-	class MultiplyNode : public ShaderNode {
-	public:
-		MultiplyNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-	};
-
-	class AddNode : public ShaderNode {
-	public:
-		AddNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-	};
-
-	class FragmentOutputNode : public ShaderNode {
-	public:
-		FragmentOutputNode(int id);
-		std::string GenerateGLSL(const ShaderGraph* graph) const override;
-	};
 
 	// Shader graph manager
 	class ShaderGraph {
@@ -149,11 +25,19 @@ namespace Nightbloom
 		std::string GenerateFragmentShader() const;
 		std::string GenerateVertexShader() const;
 
+		// Utility
+		std::vector<int> GetTopologicalSort() const;
+		void RefreshShaderInfo();
+		void ResolveAllTypes();
+		bool UsesTextures() const { return usesTextures; }
+
 		// Data
 		std::vector<std::unique_ptr<ShaderNode>> nodes;
 		std::vector<NodeConnection> connections;
 		int nextNodeId = 1;
 		int nextConnectionId = 1;
+
+		bool usesTextures = false;
 	};
 
 	// Main editor class
@@ -172,6 +56,9 @@ namespace Nightbloom
 		// Get generated shaders
 		std::string GetVertexShader() const { return vertexShaderCode; }
 		std::string GetFragmentShader() const { return fragmentShaderCode; }
+
+				// Utility
+		bool UsesTextures() const { return graph ? graph->UsesTextures() : false; }
 
 	private:
 		// UI State
