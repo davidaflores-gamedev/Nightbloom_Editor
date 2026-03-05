@@ -7,9 +7,14 @@
 
 #include "EditorFileUtils.hpp"
 #include "Engine/Core/Logger/Logger.hpp"
+#include "Engine/Renderer/AssetManager.hpp"
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace {
 	Nightbloom::Editor::EditorFileUtils::ProjectContext g_ProjectCtx{};
@@ -43,7 +48,7 @@ namespace Editor {
 		std::string editorShadersDir = GetEditorShadersSourceDirectory();
 
 		// Make sure the directory exists
-		if (!CreateDirectory(editorShadersDir))
+		if (!MakeDirectory(editorShadersDir))
 		{
 			LOG_ERROR("Failed to create editor shaders directory: {}", editorShadersDir);
 			return false;
@@ -174,7 +179,7 @@ namespace Editor {
 
 		std::filesystem::path inputPath(shaderPath);
 		std::string outputDir = GetEditorShadersCompiledDirectory();
-		CreateDirectory(outputDir);
+		MakeDirectory(outputDir);
 
 		std::filesystem::path outputPath =
 			std::filesystem::path(outputDir) / (inputPath.filename().string() + ".spv");
@@ -193,18 +198,33 @@ namespace Editor {
 		int rc = RunAndCapture(glslcPath, args, compilerOut);
 
 		if (rc == 0) {
-			// Copy the compiled .spv to where the Editor runtime expects it
-			std::filesystem::path runtimeShadersPath =
-				std::filesystem::current_path() / "Shaders";  // Editor/Shaders/
+			// Get the shader path from AssetManager - this is where shaders are LOADED from
+			std::string assetShaderPath = AssetManager::Get().GetShadersPath();
+			std::filesystem::path runtimeShadersPath;
 
-			std::filesystem::path runtimeDest =
-				runtimeShadersPath / outputPath.filename();
+			// If AssetManager has a valid path, use it
+			if (!assetShaderPath.empty() && std::filesystem::exists(std::filesystem::path(assetShaderPath).parent_path())) {
+				runtimeShadersPath = assetShaderPath;
+				LOG_INFO("Using AssetManager shader path: {}", runtimeShadersPath.string());
+			}
+			else {
+				// Fallback: find where the .exe actually is and use that + /Shaders
+				// This matches what AssetManager::Initialize does
+				char exePathBuf[MAX_PATH];
+				GetModuleFileNameA(NULL, exePathBuf, MAX_PATH);
+				std::filesystem::path exePath(exePathBuf);
+				runtimeShadersPath = exePath.parent_path() / "Shaders";
+				LOG_INFO("Using exe-relative shader path: {}", runtimeShadersPath.string());
+			}
 
-			CreateDirectory(runtimeShadersPath.string());
+			std::filesystem::path runtimeDest = runtimeShadersPath / outputPath.filename();
+
+			MakeDirectory(runtimeShadersPath.string());
 			std::filesystem::copy_file(outputPath, runtimeDest,
 				std::filesystem::copy_options::overwrite_existing);
 
-			LOG_INFO("Deployed to Editor runtime: {}", runtimeDest.string());
+			LOG_INFO("Deployed to runtime shaders: {}", runtimeDest.string());
+
 			return true;
 		}
 		else {
@@ -224,7 +244,7 @@ namespace Editor {
 		try
 		{
 			// Create Sandbox shaders directory if it doesn't exist
-			CreateDirectory(GetCurrentProjectShadersDirectory());
+			MakeDirectory(GetCurrentProjectShadersDirectory());
 
 			// Copy the file
 			std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::overwrite_existing);
@@ -268,7 +288,7 @@ namespace Editor {
 		return "";
 	}
 
-	bool EditorFileUtils::CreateDirectory(const std::string& path)
+	bool EditorFileUtils::MakeDirectory(const std::string& path)
 	{
 		try
 		{
@@ -311,7 +331,7 @@ namespace Editor {
 		// Otherwise, compute: <projectRoot>/Build/bin/<config>/Shaders
 		std::filesystem::path p = g_ProjectCtx.root / "Build" / "bin" / g_ProjectCtx.config / "Shaders";
 		// Create parent folders if needed
-		CreateDirectory(p.string());
+		MakeDirectory(p.string());
 		return p.string();
 	}
 

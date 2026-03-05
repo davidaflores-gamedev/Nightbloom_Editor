@@ -50,7 +50,7 @@ namespace Editor {
 		static std::string FindGlslcCompiler();
 
 		// Create directory if it doesn't exist
-		static bool CreateDirectory(const std::string& path);
+		static bool MakeDirectory(const std::string& path);
 
 		// Get various directories
 		static std::string GetEditorShadersSourceDirectory();     // Editor/Shaders/Source/

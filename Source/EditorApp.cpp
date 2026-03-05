@@ -29,6 +29,8 @@
 #include "Engine/Renderer/Camera.hpp"
 
 #include "Engine/Renderer/AssetManager.hpp"
+//#include "Engine/Compute/Noisegenerator.hpp"
+
 // Check if docking is available
 #ifdef IMGUI_HAS_DOCK
 #define USE_IMGUI_DOCKING 1
@@ -50,6 +52,16 @@ namespace Nightbloom {
 
 		~EditorApplication()
 		{
+
+			// CRITICAL: Wait for GPU to finish before destroying model resources
+			if (GetRenderer())
+			{
+				GetRenderer()->WaitForIdle();  // Make sure this method exists
+			}
+
+			// Clear the scene (this destroys all models/drawables)
+			m_EditorScene.reset();
+
 			SaveEditorSettings();
 
 			LOG_INFO("=== Nightbloom Editor Shutdown Complete ===");
@@ -65,85 +77,76 @@ namespace Nightbloom {
 				//GetWindow()->Maximize();
 			}
 
-			// Set up Camera
-			m_ViewMatrix = glm::lookAt(
-				glm::vec3(3.0f, 3.0f, 3.0f),  // Camera position
-				glm::vec3(0.0f, 0.0f, 0.0f),  // Look at origin
-				glm::vec3(0.0f, 1.0f, 0.0f)   // Up vector
-				);
-
-			// Set up Projection Matrix
-			float aspect = 1280 / 720.0f; // Assuming a 16:9 aspect ratio TODO: make this dynamic
-			m_ProjectionMatrix = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
-			m_ProjectionMatrix[1][1] *= -1;  // Vulkan correction
-
-			// Pass to renderer
-			GetRenderer()->SetViewMatrix(m_ViewMatrix);
-			GetRenderer()->SetProjectionMatrix(m_ProjectionMatrix);
+			float aspect = 1280 / 720.0f;
 
 			// In OnStartup()
 			m_Camera = std::make_unique<Camera>();
 			m_Camera->SetPosition(glm::vec3(3.0f, 3.0f, 3.0f));
 			m_Camera->SetRotation(-135.0f, -20.0f);  // Look toward origin
-			m_Camera->SetPerspective(45.0f, 1280.0f / 720.0f, 0.1f, 1000.0f);
+			m_Camera->SetPerspectiveInfiniteReverseZ(45.0f, aspect, 0.1f);
+			GetRenderer()->SetCameraPosition(m_Camera->GetPosition());
 
-			m_Scene = std::make_unique<TestScene>();
+			GetRenderer()->SetViewMatrix(m_Camera->GetViewMatrix());
+			GetRenderer()->SetProjectionMatrix(m_Camera->GetProjectionMatrix());
 
-			// Create test cube drawable
-			// Assuming the renderer already created vertex/index buffers
-			// You'd get these from the renderer or create them here
+			m_EditorScene = std::make_unique<Scene>();
+
+			ResourceManager* resources = GetRenderer()->GetResourceManager();
+			Texture* defaultTex = resources ? resources->GetTexture("default_white") : nullptr;
+
+			// Load ToyCar model
+			auto toyCar = std::make_unique<Model>("ToyCar");
+			std::string modelPath = AssetManager::Get().GetModelPath("ToyCar/ToyCar.gltf");
+
+			if (toyCar->LoadFromFile(modelPath,
+				GetRenderer()->GetResourceManager(),
+				GetRenderer()->GetDescriptorManager()))
+			{
+				toyCar->SetScale(0.01f);
+				toyCar->SetPosition(glm::vec3(-3.0f, -2.0f, -3.0f));
+
+				m_EditorScene->AddObject("ToyCar", std::move(toyCar), defaultTex);
+				LOG_INFO("Added ToyCar to scene");
+			}
+
 			auto* vertexBuffer = GetRenderer()->GetTestVertexBuffer();  // Add getter
 			auto* indexBuffer = GetRenderer()->GetTestIndexBuffer();    // Add getter
 			uint32_t indexCount = GetRenderer()->GetTestIndexCount();   // Add getter
 
-			TestGLTFLoader();
+			//TestGLTFLoader();
 
-			LoadToyCar();
-
-
-			ResourceManager* resources = GetRenderer()->GetResourceManager();
+			//LoadToyCar();
 
 			if (vertexBuffer && indexBuffer && indexCount > 0)
 			{
-				// Create test cube drawable
-				m_TestCube = std::make_unique<MeshDrawable>(
-					vertexBuffer, indexBuffer, indexCount,
-					m_CurrentTestPipeline
+				// Cube 1 - UV Checker
+				auto cube1 = std::make_unique<MeshDrawable>(
+					vertexBuffer, indexBuffer, indexCount, PipelineType::Mesh
 				);
-				m_TestCube->SetTransform(glm::mat4(1.0f));
-
-				//m_TestCube->SetViewMatrix(m_ViewMatrix);
-				//m_TestCube->SetProjectionMatrix(m_ProjectionMatrix);
-
-				if (resources)
+				if (auto* checker = resources->GetTexture("uv_checker"))
 				{
-					VulkanTexture* checkerTexture = resources->GetTexture("uv_checker");
-					if (checkerTexture)
-					{
-						m_TestCube->AddTexture(checkerTexture);
-						LOG_INFO("Cube 1: Added UV checker texture");
-					}
+					cube1->AddTexture(checker);
 				}
+				SceneObject* obj1 = m_EditorScene->AddPrimitive("TestCube1", std::move(cube1));
+				obj1->textureIndex = 0;  // UV Checker
+				obj1->pipeline = PipelineType::Mesh;
 
-				m_TestCube2 = std::make_unique<MeshDrawable>(
-					vertexBuffer,    // SAME geometry as cube 1!
-					indexBuffer,     // SAME geometry as cube 1!
-					indexCount,      // SAME index count!
-					PipelineType::Mesh  // Use Mesh pipeline (has depth enabled!)
+				// Cube 2
+				auto cube2 = std::make_unique<MeshDrawable>(
+					vertexBuffer, indexBuffer, indexCount, PipelineType::Mesh
 				);
 
-				glm::mat4 cube2Transform = glm::translate(glm::mat4(1.0f), glm::vec3(.50f, 0.2f, -1.0f));
-				m_TestCube2->SetTransform(cube2Transform);
+				glm::mat4 cube2Transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.2f, -1.0f));
+				cube2->SetTransform(cube2Transform);
 
-				if (resources)
+				if (auto* white = resources->GetTexture("default_white"))
 				{
-					VulkanTexture* whiteTexture = resources->GetTexture("default_white");
-					if (whiteTexture)
-					{
-						m_TestCube2->AddTexture(whiteTexture);
-						LOG_INFO("Cube 2: Added white texture");
-					}
+					cube2->AddTexture(white);
 				}
+				SceneObject* obj2 = m_EditorScene->AddPrimitive("TestCube2", std::move(cube2));
+				obj2->textureIndex = 1;  // White
+				obj2->pipeline = PipelineType::Mesh;
+				obj2->primitiveTransform = cube2Transform;
 
 				LOG_INFO("Created 2 cubes sharing the same vertex/index buffers");
 			}
@@ -152,6 +155,49 @@ namespace Nightbloom {
 				LOG_ERROR("Test geometry not available! vertexBuffer={}, indexBuffer={}, indexCount={}",
 					(void*)vertexBuffer, (void*)indexBuffer, indexCount);
 			}
+
+			// === ADD: Ground plane ===
+			auto* gpVB = GetRenderer()->GetGroundPlaneVertexBuffer();
+			auto* gpIB = GetRenderer()->GetGroundPlaneIndexBuffer();
+			uint32_t gpIC = GetRenderer()->GetGroundPlaneIndexCount();
+
+			if (gpVB && gpIB && gpIC > 0)
+			{
+				auto groundPlane = std::make_unique<MeshDrawable>(
+					gpVB, gpIB, gpIC, PipelineType::Mesh
+				);
+
+				// Position the plane below the car
+				glm::mat4 groundTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.5f, 0.0f));
+				groundPlane->SetTransform(groundTransform);
+
+				// Use the white texture — the lighting will provide all the visual interest
+				if (auto* white = resources->GetTexture("default_white"))
+				{
+					groundPlane->AddTexture(white);
+				}
+
+				SceneObject* groundObj = m_EditorScene->AddPrimitive("Ground", std::move(groundPlane));
+				groundObj->textureIndex = 1;  // White
+				groundObj->pipeline = PipelineType::Mesh;
+				groundObj->primitiveTransform = groundTransform;
+
+				LOG_INFO("Added ground plane to scene");
+			}
+
+
+			Light* moonlight = m_EditorScene->AddLight("Moonlight", LightType::Directional);
+			moonlight->direction = glm::vec3(-0.3f, -0.8f, -0.5f);
+			moonlight->color = glm::vec3(0.6f, 0.7f, 1.0f);
+			moonlight->intensity = 0.8f;
+
+			// Select first object by default
+			if (m_EditorScene->GetObjectCount() > 0)
+			{
+				m_EditorScene->Select(0);
+			}
+
+
 
 			// Enable docking if available
 			#if USE_IMGUI_DOCKING
@@ -162,6 +208,14 @@ namespace Nightbloom {
 
 			m_ShaderNodeEditor = std::make_unique<ShaderNodeEditor>();
 
+			GetWindow()->SetResizeCallback([this](uint32_t width, uint32_t height) {
+				if (width > 0 && height > 0 && m_Camera)
+				{
+					float aspect = static_cast<float>(width) / static_cast<float>(height);
+					m_Camera->SetPerspectiveInfiniteReverseZ(45.0f, aspect, 0.1f);
+					LOG_INFO("Camera aspect ratio updated to {}", aspect);
+				}
+			});
 		}
 
 		void OnUpdate(float deltaTime) override
@@ -215,25 +269,30 @@ namespace Nightbloom {
 			// Update camera
 			m_Camera->Update(deltaTime);
 
+			SceneLightingData lightData = m_EditorScene->BuildLightingData();
+
 			// Pass to renderer
 			GetRenderer()->SetViewMatrix(m_Camera->GetViewMatrix());
 			GetRenderer()->SetProjectionMatrix(m_Camera->GetProjectionMatrix());
+			GetRenderer()->SetCameraPosition(m_Camera->GetPosition());
+			GetRenderer()->SetLightingData(lightData);
 
-			if (m_TestCube)
+			m_Rotation += deltaTime * m_RotationSpeed;
+
+			if (auto* toyCar = m_EditorScene->GetObject(0))  // Assuming ToyCar is index 0
 			{
-				// Rotate the cube
-				m_Rotation += deltaTime * m_RotationSpeed;
-				glm::mat4 transform = glm::rotate(glm::mat4(1.0f), m_Rotation, glm::vec3(0, 1, 0));
-				m_TestCube->SetTransform(transform);
-				m_TestCube->Update(deltaTime);
-
-				float baseRotationX = glm::radians(90.f);
-				m_ToyCar->SetRotation(glm::vec3(baseRotationX, m_Rotation, 0));
+				if (toyCar->model)
+				{
+					float baseRotationX = glm::radians(90.f);
+					toyCar->model->SetRotation(glm::vec3(baseRotationX, m_Rotation, 0));
+				}
 			}
 
 			// Update scene
-			if (m_Scene)
-				m_Scene->Update(deltaTime);
+			if (m_EditorScene)
+			{
+				m_EditorScene->Update(deltaTime);
+			}
 
 			// Handle editor shortcuts
 			HandleEditorShortcuts();
@@ -243,26 +302,10 @@ namespace Nightbloom {
 		{
 			DrawList drawList;
 
-			//// Add test cube
-			//if (m_TestCube)
-			//{
-			//	drawList.AddDrawable(m_TestCube.get());
-			//}
-			//
-			//if (m_TestCube2)
-			//{
-			//	drawList.AddDrawable(m_TestCube2.get());
-			//}
-
-			if (m_ToyCarDrawable)
-			{
-				drawList.AddDrawable(m_ToyCarDrawable.get());
-			}
-
 			// Add scene objects
-			if (m_Scene)
+			if (m_EditorScene)
 			{
-				m_Scene->BuildDrawList(drawList);
+				m_EditorScene->BuildDrawList(drawList);
 			}
 
 			// Sort by pipeline for efficiency
@@ -279,11 +322,8 @@ namespace Nightbloom {
 		// For live shader testing
 		float m_Rotation = 0.0f;
 		float m_RotationSpeed = 1.0f;  // Speed of rotation for live shader test
-		std::unique_ptr<MeshDrawable> m_TestCube;
-		std::unique_ptr<MeshDrawable> m_TestCube2;
 
-		std::unique_ptr<Model> m_ToyCar;
-		std::unique_ptr<ModelDrawable> m_ToyCarDrawable;
+		std::unique_ptr<Scene> m_EditorScene;
 
 		std::unique_ptr<Camera> m_Camera;
 		bool m_CameraControlActive = false;  // Only move camera when right-click held
@@ -302,9 +342,16 @@ namespace Nightbloom {
 		bool m_ShowConsole = true;
 		bool m_ShowProjectSettings = false;
 		bool m_ShowLiveShaderTest = true;
+		bool m_ShowLightingPanel = true;
 
 		// Tools
 		std::unique_ptr<ShaderNodeEditor> m_ShaderNodeEditor;
+
+		bool m_ShowNoiseGenerator = false;
+
+		std::vector<VulkanTexture*> m_GeneratedNoiseTextures;
+
+		PipelineType m_CurrentTestPipeline = PipelineType::Mesh;
 
 		// Stats
 		float m_FrameTime = 0.0f;
@@ -358,7 +405,6 @@ namespace Nightbloom {
 			// Keep going up until we find a directory that contains BOTH Editor and Sandbox folders
 			while (searchPath.has_parent_path()) {
 				if (std::filesystem::exists(searchPath / "Editor") &&
-					std::filesystem::exists(searchPath / "Sandbox") &&
 					std::filesystem::exists(searchPath / "NightBloom")) {
 					engineRoot = searchPath;
 					LOG_INFO("Found NightBloom_Engine root at: {}", engineRoot.string());
@@ -469,37 +515,6 @@ namespace Nightbloom {
 			LOG_INFO("=== GLTF Loader Test Complete ===");
 		}
 
-		void LoadToyCar()
-		{
-			LOG_INFO("=== Loading ToyCar Model ===");
-
-			m_ToyCar = std::make_unique<Model>("ToyCar");
-
-			std::string modelPath = AssetManager::Get().GetModelPath("ToyCar/ToyCar.gltf");
-
-			if (!m_ToyCar->LoadFromFile(modelPath,
-				GetRenderer()->GetResourceManager(),
-				GetRenderer()->GetDescriptorManager()))
-			{
-				LOG_ERROR("Failed to load ToyCar model");
-				m_ToyCar.reset();
-				return;
-			}
-
-			// The model is HUGE (raw verts are ~350 units) but has a 0.0001 scale in glTF
-			// Apply that scale here
-			m_ToyCar->SetScale(0.01f);  // Adjust as needed to fit your scene
-			m_ToyCar->SetPosition(glm::vec3(-3.0f, -2.0f, -3.0f));
-			
-			ResourceManager* resources = GetRenderer()->GetResourceManager();
-			Texture* defaultTex = resources ? resources->GetTexture("default_white") : nullptr;
-
-			// Create drawable
-			m_ToyCarDrawable = std::make_unique<ModelDrawable>(m_ToyCar.get(), defaultTex);
-
-			LOG_INFO("=== ToyCar Model Loaded ===");
-		}
-
 		void RenderEditorUI()
 		{
 			// Main menu bar
@@ -548,6 +563,7 @@ namespace Nightbloom {
 					if (ImGui::MenuItem("Scene Hierarchy", nullptr, &m_ShowSceneHierarchy)) {}
 					if (ImGui::MenuItem("Inspector", nullptr, &m_ShowInspector)) {}
 					if (ImGui::MenuItem("Console", nullptr, &m_ShowConsole)) {}
+					if (ImGui::MenuItem("Lighting", nullptr, &m_ShowLightingPanel)) {}
 					ImGui::Separator();
 					if (ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowDemoWindow)) {}
 					if (ImGui::MenuItem("ImGui Metrics", nullptr, &m_ShowMetricsWindow)) {}
@@ -624,6 +640,13 @@ namespace Nightbloom {
 
 			if (m_ShowLiveShaderTest) RenderLiveShaderTest();
 
+			if (m_ShowLightingPanel)
+			{
+				ImGui::Begin("Lighting", &m_ShowLightingPanel);
+				RenderLightingPanel();
+				ImGui::End();
+			}
+
 			// Always render viewport
 			RenderSceneViewport();
 
@@ -671,51 +694,27 @@ namespace Nightbloom {
 						config.frontFace = Nightbloom::FrontFace::CounterClockwise;
 						config.depthTestEnable = true;
 						config.depthWriteEnable = true;
-						config.depthCompareOp = Nightbloom::CompareOp::Less;
+						config.depthCompareOp = Nightbloom::CompareOp::GreaterOrEqual;
 						config.blendEnable = false;
 						config.useUniformBuffer = true;  // ADD THIS
-						config.useTextures = m_ShaderNodeEditor->UsesTextures();
-
-						//Push constants if needed
+						config.useTextures =true;
 						config.pushConstantSize = sizeof(PushConstantData);
 						config.pushConstantStages = Nightbloom::ShaderStage::VertexFragment;
 
-						// Get the pipeline manager from renderer
 						if (GetRenderer()->GetPipelineManager()->CreatePipeline(
 							Nightbloom::PipelineType::NodeGenerated,config))
 						{
-							// AUTOMATICALLY SWITCH TO THE NEW SHADER
 							m_CurrentTestPipeline = PipelineType::NodeGenerated;
 
 							// Update test cube
-							if (m_TestCube)
+							if (m_EditorScene)
 							{
-								auto* vb = GetRenderer()->GetTestVertexBuffer();
-								auto* ib = GetRenderer()->GetTestIndexBuffer();
-								uint32_t ic = GetRenderer()->GetTestIndexCount();
-
-								if (vb && ib && ic > 0)
+								SceneObject* selected = m_EditorScene->GetSelected();
+								if (selected && selected->meshDrawable)
 								{
-									m_TestCube = std::make_unique<MeshDrawable>(
-										vb, ib, ic, PipelineType::NodeGenerated
-									);
-									//m_TestCube->SetViewMatrix(m_ViewMatrix);
-									//m_TestCube->SetProjectionMatrix(m_ProjectionMatrix);
-
-									if (auto* resources = GetRenderer()->GetResourceManager())
-									{
-										if (auto* checker = resources->GetTexture("uv_checker"))
-										{
-											m_TestCube->AddTexture(checker);
-											LOG_INFO("Attached uv_checker to NodeGenerated drawable after compile");
-										}
-										else
-										{
-											LOG_WARN("uv_checker texture missing after compile");
-										}
-									}
-
-									LOG_INFO("Now rendering with NodeGenerated shader!");
+									// Recreate the drawable with the new pipeline
+									ApplyPipelineToSelectedPrimitive(PipelineType::NodeGenerated);
+									LOG_INFO("Applied NodeGenerated shader to selected primitive");
 								}
 							}
 						}
@@ -782,80 +781,73 @@ namespace Nightbloom {
 		{
 			ImGui::Begin("Live Shader Test", &m_ShowLiveShaderTest);
 
+			// Check if we have a selected primitive
+			SceneObject* selected = m_EditorScene ? m_EditorScene->GetSelected() : nullptr;
+			bool hasPrimitive = selected && selected->meshDrawable;
+
+			if (!hasPrimitive)
+			{
+				ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+					"Select a primitive in the hierarchy to test shaders");
+				ImGui::Text("(Models use their own materials)");
+				ImGui::End();
+				return;
+			}
+
+			ImGui::Text("Testing on: %s", selected->name.c_str());
+			ImGui::Separator();
+
 			// Pipeline selector
 			const char* pipelineNames[] = {
-				"Triangle", "Mesh", "Shadow", "Skybox",
+				"Triangle", "Mesh", "Transparent", "Shadow", "Skybox",
 				"Volumetric", "PostProcess", "Compute", "NodeGenerated"
 			};
 
-			int currentPipeline = static_cast<int>(m_CurrentTestPipeline);
-			if (ImGui::Combo("Test Pipeline", &currentPipeline, pipelineNames,
+			int currentPipeline = (int)(selected->pipeline);
+			if (ImGui::Combo("Pipeline", &currentPipeline, pipelineNames,
 				static_cast<int>(PipelineType::Count)))
 			{
-				m_CurrentTestPipeline = static_cast<PipelineType>(currentPipeline);
+				PipelineType newPipeline = static_cast<PipelineType>(currentPipeline);
 
-				// Update the test cube to use new pipeline
-				if (m_TestCube)
+				// Check if pipeline exists
+				auto* pipelineManager = GetRenderer()->GetPipelineManager();
+				if (pipelineManager->GetPipeline(newPipeline) == nullptr)
 				{
-					auto* pipelineManager = GetRenderer()->GetPipelineManager();
-					if (pipelineManager->GetPipeline(m_CurrentTestPipeline) == nullptr)
+					LOG_WARN("Pipeline {} does not exist!", pipelineNames[currentPipeline]);
+				}
+				else
+				{
+					selected->pipeline = newPipeline;
+					m_CurrentTestPipeline = newPipeline;
+					ApplyPipelineToSelectedPrimitive(newPipeline);
+					LOG_INFO("Switched to {} pipeline", pipelineNames[currentPipeline]);
+				}
+			}
+
+			ImGui::Separator();
+
+			const char* textureNames[] = { "UV Checker", "White", "Black", "Normal" };
+			const char* textureLookup[] = { "uv_checker", "default_white", "default_black", "default_normal" };
+
+			if (ImGui::Combo("Texture", &selected->textureIndex, textureNames, 4))
+			{
+				ResourceManager* resources = GetRenderer()->GetResourceManager();
+				if (resources && selected->meshDrawable)
+				{
+					selected->meshDrawable->ClearTextures();
+
+					VulkanTexture* texture = resources->GetTexture(textureLookup[selected->textureIndex]);
+					if (texture)
 					{
-						LOG_ERROR("Pipeline {} does not exist!", pipelineNames[static_cast<int>(m_CurrentTestPipeline)]);
-					//	return;
-					}
-
-					auto* vb = GetRenderer()->GetTestVertexBuffer();
-					auto* ib = GetRenderer()->GetTestIndexBuffer();
-					uint32_t ic = GetRenderer()->GetTestIndexCount();
-
-					if (vb && ib && ic > 0)
-					{
-						m_TestCube = std::make_unique<MeshDrawable>(
-							vb, ib, ic, m_CurrentTestPipeline
-						);
-						//m_TestCube->SetViewMatrix(m_ViewMatrix);
-						//m_TestCube->SetProjectionMatrix(m_ProjectionMatrix);
-
-						ResourceManager* resources = GetRenderer()->GetResourceManager();
-						if (resources)
-						{
-							VulkanTexture* texture = resources->GetTexture("uv_checker");
-							if (texture)
-							{
-								m_TestCube->AddTexture(texture);
-							}
-						}
-
-						LOG_INFO("Switched to {} pipeline", pipelineNames[currentPipeline]);
+						selected->meshDrawable->AddTexture(texture);
+						LOG_INFO("Switched to {} texture", textureNames[selected->textureIndex]);
 					}
 				}
 			}
 
 			ImGui::Separator();
-			ImGui::Text("The cube is now using: %s", pipelineNames[currentPipeline]);
 
-			static int textureChoice = 0;
-			const char* textureNames[] = { "UV Checker", "White", "Black", "Normal" };
-
-			if (ImGui::Combo("Texture", &textureChoice, textureNames, 4))
-			{
-				ResourceManager* resources = GetRenderer()->GetResourceManager();
-				if (resources && m_TestCube)
-				{
-					m_TestCube->ClearTextures();
-
-					const char* textureLookup[] = { "uv_checker", "default_white", "default_black", "default_normal" };
-					VulkanTexture* texture = resources->GetTexture(textureLookup[textureChoice]);
-
-					if (texture)
-					{
-						m_TestCube->AddTexture(texture);
-						LOG_INFO("Switched to {} texture", textureNames[textureChoice]);
-					}
-				}
-			}
-
-			// Rotation speed control
+			// Rotation speed control (affects all objects via m_Rotation)
 			ImGui::SliderFloat("Rotation Speed", &m_RotationSpeed, 0.0f, 5.0f);
 
 			if (ImGui::Button("Reset Rotation"))
@@ -902,66 +894,557 @@ namespace Nightbloom {
 		{
 			ImGui::Begin("Scene Hierarchy", &m_ShowSceneHierarchy);
 
-			// Scene tree
-			if (ImGui::TreeNode("Scene Root"))
+			if (!m_EditorScene)
 			{
-				if (ImGui::TreeNode("Camera"))
+				ImGui::Text("No scene loaded");
+				ImGui::End();
+				return;
+			}
+
+			// Scene root
+			ImGuiTreeNodeFlags rootFlags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow;
+			if (ImGui::TreeNodeEx("Scene", rootFlags))
+			{
+				auto& objects = m_EditorScene->GetObjects();
+				int selectedIndex = m_EditorScene->GetSelectedIndex();
+
+				for (size_t i = 0; i < objects.size(); ++i)
 				{
-					ImGui::Text("Main Camera");
-					ImGui::TreePop();
+					auto& obj = objects[i];
+
+					ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+					// Highlight selected
+					if (static_cast<int>(i) == selectedIndex)
+					{
+						nodeFlags |= ImGuiTreeNodeFlags_Selected;
+					}
+
+					// Dim if invisible
+					if (!obj.visible)
+					{
+						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+					}
+
+					// Icon based on type
+					const char* icon = obj.model ? "[M]" : "[P]";  // Model or Primitive
+
+					ImGui::TreeNodeEx((void*)(intptr_t)i, nodeFlags, "%s %s", icon, obj.name.c_str());
+
+					// Selection
+					if (ImGui::IsItemClicked())
+					{
+						m_EditorScene->Select(static_cast<int>(i));
+					}
+
+					// Context menu
+					if (ImGui::BeginPopupContextItem())
+					{
+						if (ImGui::MenuItem("Toggle Visibility"))
+						{
+							obj.visible = !obj.visible;
+						}
+						if (ImGui::MenuItem("Rename..."))
+						{
+							// TODO: Open rename dialog
+						}
+						ImGui::Separator();
+						if (ImGui::MenuItem("Delete"))
+						{
+							m_EditorScene->RemoveObject(i);
+							ImGui::EndPopup();
+
+							if (!obj.visible)
+							{
+								ImGui::PopStyleColor();
+							}
+							break;  // Iterator invalidated
+						}
+						ImGui::EndPopup();
+					}
+
+					if (!obj.visible)
+					{
+						ImGui::PopStyleColor();
+					}
 				}
 
-				if (ImGui::TreeNode("Cube"))
+				ImGui::Separator();
+				if (ImGui::TreeNodeEx("Lights", ImGuiTreeNodeFlags_DefaultOpen))
 				{
-					ImGui::Text("Test Cube");
-					ImGui::TreePop();
-				}
+					auto& lights = m_EditorScene->GetLights();
+					int selectedLightIndex = m_EditorScene->GetSelectedLightIndex();
 
-				if (ImGui::TreeNode("Lights"))
-				{
-					ImGui::Text("Directional Light");
+					for (size_t i = 0; i < lights.size(); ++i)
+					{
+						auto& light = lights[i];
+
+						ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+						if (static_cast<int>(i) == selectedLightIndex)
+						{
+							nodeFlags |= ImGuiTreeNodeFlags_Selected;
+						}
+
+						if (!light.enabled)
+						{
+							ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+						}
+
+						const char* icon = (light.type == LightType::Directional) ? "[D]" : "[P]";
+						ImGui::TreeNodeEx((void*)(intptr_t)(1000 + i), nodeFlags, "%s %s", icon, light.name.c_str());
+
+						if (ImGui::IsItemClicked())
+						{
+							m_EditorScene->SelectLight(static_cast<int>(i));
+						}
+
+						// Context menu
+						if (ImGui::BeginPopupContextItem())
+						{
+							if (ImGui::MenuItem("Toggle Enabled"))
+							{
+								light.enabled = !light.enabled;
+							}
+							if (ImGui::MenuItem("Delete"))
+							{
+								m_EditorScene->RemoveLight(i);
+								ImGui::EndPopup();
+								if (!light.enabled) ImGui::PopStyleColor();
+								break;
+							}
+							ImGui::EndPopup();
+						}
+
+						if (!light.enabled)
+						{
+							ImGui::PopStyleColor();
+						}
+					}
+
 					ImGui::TreePop();
 				}
 
 				ImGui::TreePop();
 			}
 
+			ImGui::Separator();
+
+			// Add object button
+			if (ImGui::Button("+ Add Object"))
+			{
+				ImGui::OpenPopup("AddObjectPopup");
+			}
+
+			if (ImGui::BeginPopup("AddObjectPopup"))
+			{
+				if (ImGui::MenuItem("Load Model..."))
+				{
+					// TODO: Open file dialog
+					LOG_INFO("Load model dialog - not yet implemented");
+				}
+				if (ImGui::MenuItem("Primitive Cube"))
+				{
+					// TODO: Add primitive cube
+					LOG_INFO("Add cube - not yet implemented");
+				}
+
+				ImGui::Separator();
+				if (ImGui::MenuItem("Directional Light"))
+				{
+					Light* newLight = m_EditorScene->AddLight("Directional Light", LightType::Directional);
+					newLight->direction = glm::vec3(0.0f, -1.0f, 0.0f);
+					newLight->color = glm::vec3(1.0f);
+					newLight->intensity = 1.0f;
+					LOG_INFO("Added directional light");
+				}
+				if (ImGui::MenuItem("Point Light"))
+				{
+					Light* newLight = m_EditorScene->AddLight("Point Light", LightType::Point);
+					newLight->position = glm::vec3(0.0f, 3.0f, 0.0f);
+					newLight->color = glm::vec3(1.0f, 0.8f, 0.6f);  // Warm
+					newLight->intensity = 2.0f;
+					LOG_INFO("Added point light");
+				}
+
+				ImGui::EndPopup();
+			}
+
 			ImGui::End();
+		}
+
+		// Helper method to apply a pipeline to the selected primitive
+// Add this to the private section of EditorApplication
+		void ApplyPipelineToSelectedPrimitive(PipelineType pipeline)
+		{
+			if (!m_EditorScene) return;
+
+			SceneObject* selected = m_EditorScene->GetSelected();
+			if (!selected || !selected->meshDrawable) return;
+
+			// Get the renderer resources
+			auto* vb = GetRenderer()->GetTestVertexBuffer();
+			auto* ib = GetRenderer()->GetTestIndexBuffer();
+			uint32_t ic = GetRenderer()->GetTestIndexCount();
+
+			if (!vb || !ib || ic == 0) return;
+
+			// Get current textures before we destroy the drawable
+			ResourceManager* resources = GetRenderer()->GetResourceManager();
+
+			// Create new drawable with the new pipeline
+			auto newDrawable = std::make_unique<MeshDrawable>(vb, ib, ic, pipeline);
+
+			// RESTORE THE TRANSFORM!
+			newDrawable->SetTransform(selected->primitiveTransform);
+
+			// Re-add a default texture
+			if (resources)
+			{
+				const char* textureLookup[] = { "uv_checker", "default_white", "default_black", "default_normal" };
+				int texIdx = selected->textureIndex;
+				if (texIdx >= 0 && texIdx < 4)
+				{
+					VulkanTexture* texture = resources->GetTexture(textureLookup[texIdx]);
+					if (texture)
+					{
+						newDrawable->AddTexture(texture);
+					}
+				}
+			}
+
+			selected->pipeline = pipeline;
+
+			// Replace the drawable
+			selected->meshDrawable = std::move(newDrawable);
 		}
 
 		void RenderInspector()
 		{
 			ImGui::Begin("Inspector", &m_ShowInspector);
 
-			ImGui::Text("Selected: Cube");
+			if (!m_EditorScene)
+			{
+				ImGui::Text("No scene");
+				ImGui::End();
+				return;
+			}
+
+			SceneObject* selected = m_EditorScene->GetSelected();
+
+			if (!selected)
+			{
+				ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No object selected");
+				ImGui::End();
+				return;
+			}
+
+			// Object name (editable)
+			char nameBuf[256];
+			strncpy(nameBuf, selected->name.c_str(), sizeof(nameBuf) - 1);
+			nameBuf[sizeof(nameBuf) - 1] = '\0';
+
+			if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+			{
+				selected->name = nameBuf;
+			}
+
+			// Visibility toggle
+			ImGui::Checkbox("Visible", &selected->visible);
+
 			ImGui::Separator();
 
+			// Transform section
 			if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
 			{
-				static float position[3] = { 0.0f, 0.0f, 0.0f };
-				static float rotation[3] = { 0.0f, 0.0f, 0.0f };
-				static float scale[3] = { 1.0f, 1.0f, 1.0f };
+				if (selected->model)
+				{
+					// Get current values
+					glm::vec3 position = selected->GetPosition();
+					glm::vec3 rotation = selected->GetRotation();
+					glm::vec3 scale = selected->GetScale();
 
-				ImGui::DragFloat3("Position", position, 0.1f);
-				ImGui::DragFloat3("Rotation", rotation, 1.0f);
-				ImGui::DragFloat3("Scale", scale, 0.1f);
+					// Convert rotation from radians to degrees for display
+					glm::vec3 rotationDeg = glm::degrees(rotation);
+
+					bool changed = false;
+
+					// Position
+					if (ImGui::DragFloat3("Position", &position.x, 0.1f))
+					{
+						selected->SetPosition(position);
+						changed = true;
+					}
+
+					// Rotation (in degrees)
+					if (ImGui::DragFloat3("Rotation", &rotationDeg.x, 1.0f))
+					{
+						selected->SetRotation(glm::radians(rotationDeg));
+						changed = true;
+					}
+
+					// Scale
+					if (ImGui::DragFloat3("Scale", &scale.x, 0.01f, 0.001f, 100.0f))
+					{
+						selected->SetScale(scale);
+						changed = true;
+					}
+
+					// Uniform scale helper
+					static float uniformScale = 1.0f;
+					if (changed)
+					{
+						uniformScale = (scale.x + scale.y + scale.z) / 3.0f;
+					}
+
+					if (ImGui::DragFloat("Uniform Scale", &uniformScale, 0.01f, 0.001f, 100.0f))
+					{
+						selected->SetScale(uniformScale);
+					}
+
+					// Reset button
+					if (ImGui::Button("Reset Transform"))
+					{
+						selected->SetPosition(glm::vec3(0.0f));
+						selected->SetRotation(glm::vec3(0.0f));
+						selected->SetScale(glm::vec3(1.0f));
+					}
+				}
+				else
+				{
+					ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+						"(Primitive - transform not editable yet)");
+				}
 			}
 
-			if (ImGui::CollapsingHeader("Mesh"))
+			// Mesh info section
+			if (selected->model && ImGui::CollapsingHeader("Mesh Info"))
 			{
-				ImGui::Text("Mesh: Cube");
-				ImGui::Text("Vertices: 8");
-				ImGui::Text("Triangles: 12");
+				ImGui::Text("Meshes: %zu", selected->GetMeshCount());
+				ImGui::Text("Vertices: %zu", selected->GetVertexCount());
+				ImGui::Text("Indices: %zu", selected->GetIndexCount());
+
+				// List individual meshes
+				if (ImGui::TreeNode("Meshes"))
+				{
+					const auto& meshes = selected->model->GetMeshes();
+					for (size_t i = 0; i < meshes.size(); ++i)
+					{
+						const auto& mesh = meshes[i];
+						ImGui::BulletText("%s: %u verts, %u indices",
+							mesh->GetName().c_str(),
+							mesh->GetVertexCount(),
+							mesh->GetIndexCount());
+					}
+					ImGui::TreePop();
+				}
 			}
 
-			if (ImGui::CollapsingHeader("Material"))
+			// Materials section
+			if (selected->model && ImGui::CollapsingHeader("Materials"))
 			{
-				ImGui::Text("Shader: Default");
-				static float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-				ImGui::ColorEdit4("Color", color);
+				const auto& materials = selected->model->GetMaterials();
+
+				if (materials.empty())
+				{
+					ImGui::Text("No materials");
+				}
+				else
+				{
+					for (size_t i = 0; i < materials.size(); ++i)
+					{
+						Material* mat = materials[i].get();
+						if (!mat) continue;
+
+						ImGui::PushID(static_cast<int>(i));
+
+						if (ImGui::TreeNode(mat->GetName().c_str()))
+						{
+							// Albedo color
+							glm::vec4 albedo = mat->GetAlbedoColor();
+							if (ImGui::ColorEdit4("Albedo", &albedo.x))
+							{
+								mat->SetAlbedoColor(albedo);
+							}
+
+							// Metallic/Roughness
+							float metallic = mat->GetMetallic();
+							if (ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f))
+							{
+								mat->SetMetallic(metallic);
+							}
+
+							float roughness = mat->GetRoughness();
+							if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f))
+							{
+								mat->SetRoughness(roughness);
+							}
+
+							// Texture info
+							if (mat->HasAlbedoTexture())
+							{
+								ImGui::Text("Albedo Texture: Yes");
+							}
+							else
+							{
+								ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Albedo Texture: None");
+							}
+
+							if (mat->HasNormalTexture())
+							{
+								ImGui::Text("Normal Texture: Yes");
+							}
+
+							ImGui::TreePop();
+						}
+
+						ImGui::PopID();
+					}
+				}
 			}
 
 			ImGui::End();
+		}
+
+		void RenderLightingPanel()
+		{
+			Light* selectedLight = m_EditorScene ? m_EditorScene->GetSelectedLight() : nullptr;
+
+			if (!selectedLight)
+			{
+				// No light selected — show summary
+				if (m_EditorScene)
+				{
+					ImGui::Text("Lights: %zu", m_EditorScene->GetLightCount());
+					ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+						"Select a light in the hierarchy to edit");
+				}
+				return;
+			}
+
+			// ---- Name ----
+			char nameBuf[256];
+			strncpy(nameBuf, selectedLight->name.c_str(), sizeof(nameBuf) - 1);
+			nameBuf[sizeof(nameBuf) - 1] = '\0';
+			if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+			{
+				selectedLight->name = nameBuf;
+			}
+
+			// ---- Enabled ----
+			ImGui::Checkbox("Enabled", &selectedLight->enabled);
+
+			// ---- Type ----
+			const char* typeNames[] = { "Directional", "Point" };
+			int currentType = static_cast<int>(selectedLight->type);
+			if (ImGui::Combo("Type", &currentType, typeNames, 2))
+			{
+				selectedLight->type = static_cast<LightType>(currentType);
+			}
+
+			ImGui::Separator();
+
+			// ---- Color + Intensity ----
+			ImGui::ColorEdit3("Color", &selectedLight->color.x);
+			ImGui::SliderFloat("Intensity", &selectedLight->intensity, 0.0f, 10.0f, "%.2f");
+
+			ImGui::Separator();
+
+			// ---- Type-specific properties ----
+			if (selectedLight->type == LightType::Directional)
+			{
+				ImGui::Text("Direction");
+				ImGui::DragFloat3("Dir", &selectedLight->direction.x, 0.01f, -1.0f, 1.0f);
+
+				// Normalize button
+				if (ImGui::Button("Normalize Direction"))
+				{
+					float len = glm::length(selectedLight->direction);
+					if (len > 0.0001f)
+					{
+						selectedLight->direction = glm::normalize(selectedLight->direction);
+					}
+				}
+
+				// Visual helper: show direction as angles
+				glm::vec3 dir = glm::normalize(selectedLight->direction);
+				float elevation = glm::degrees(asinf(-dir.y));  // Negative because direction is FROM light
+				float azimuth = glm::degrees(atan2f(dir.x, dir.z));
+				ImGui::Text("Elevation: %.1f deg, Azimuth: %.1f deg", elevation, azimuth);
+			}
+			else if (selectedLight->type == LightType::Point)
+			{
+				ImGui::DragFloat3("Position", &selectedLight->position.x, 0.1f);
+				ImGui::SliderFloat("Radius", &selectedLight->radius, 1.0f, 200.0f);
+
+				if (ImGui::CollapsingHeader("Attenuation"))
+				{
+					ImGui::SliderFloat("Constant", &selectedLight->constant, 0.0f, 5.0f);
+					ImGui::SliderFloat("Linear", &selectedLight->linear, 0.0f, 1.0f, "%.4f");
+					ImGui::SliderFloat("Quadratic", &selectedLight->quadratic, 0.0f, 0.5f, "%.5f");
+
+					// Presets
+					if (ImGui::Button("Short Range"))
+					{
+						selectedLight->constant = 1.0f;
+						selectedLight->linear = 0.35f;
+						selectedLight->quadratic = 0.44f;
+						selectedLight->radius = 10.0f;
+					}
+					ImGui::SameLine();
+					if (ImGui::Button("Medium Range"))
+					{
+						selectedLight->constant = 1.0f;
+						selectedLight->linear = 0.09f;
+						selectedLight->quadratic = 0.032f;
+						selectedLight->radius = 50.0f;
+					}
+					ImGui::SameLine();
+					if (ImGui::Button("Long Range"))
+					{
+						selectedLight->constant = 1.0f;
+						selectedLight->linear = 0.022f;
+						selectedLight->quadratic = 0.0019f;
+						selectedLight->radius = 150.0f;
+					}
+				}
+			}
+
+			// ---- Ambient (scene-wide, show for any light) ----
+			ImGui::Separator();
+			ImGui::Text("Scene Ambient");
+
+			// Access the scene's ambient through the first light's context
+			// (ambient is scene-wide, stored in SceneLightingData)
+
+			glm::vec3 ambientColor = m_EditorScene->GetAmbientColor();
+			float ambientIntensity = m_EditorScene->GetAmbientIntensity();
+
+			if (ImGui::ColorEdit3("Ambient Color", &ambientColor.x))
+			{
+				m_EditorScene->SetAmbient(ambientColor, ambientIntensity);
+			}
+			if (ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 2.0f))
+			{
+				m_EditorScene->SetAmbient(ambientColor, ambientIntensity);
+			}
+
+			ImGui::Separator();
+			ImGui::Text("Shadow Settings");
+
+			Renderer* renderer = GetRenderer();
+			bool shadowEnabled = renderer->IsShadowEnabled();
+			if (ImGui::Checkbox("Enable Shadows", &shadowEnabled))
+			{
+				renderer->SetShadowEnabled(shadowEnabled);
+			}
+
+			// Shadow center control
+			static glm::vec3 shadowCenter = glm::vec3(0.0f);
+			if (ImGui::DragFloat3("Shadow Center", &shadowCenter.x, 0.5f))
+			{
+				renderer->SetShadowCenter(shadowCenter);
+			}
 		}
 
 		void RenderConsole()
@@ -1257,7 +1740,7 @@ namespace Nightbloom {
 			config.frontFace = FrontFace::CounterClockwise;
 			config.depthTestEnable = true;
 			config.depthWriteEnable = true;
-			config.depthCompareOp = CompareOp::Less;
+			config.depthCompareOp = CompareOp::GreaterOrEqual;
 			config.useTextures = m_ShaderNodeEditor->UsesTextures();
 			config.useUniformBuffer = true;
 			config.pushConstantSize = sizeof(PushConstantData);

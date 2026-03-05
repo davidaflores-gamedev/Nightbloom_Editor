@@ -67,5 +67,54 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/EditorResources")
     )
 endif()
 
+#------------------------------------------------------------------------------
+# Shader Compilation
+#------------------------------------------------------------------------------
+
+# Find Vulkan SDK's glslc compiler
+find_program(GLSLC glslc HINTS 
+    $ENV{VULKAN_SDK}/Bin 
+    $ENV{VULKAN_SDK}/Bin32
+)
+
+if(NOT GLSLC)
+    message(WARNING "glslc not found! Shaders won't be compiled automatically.")
+else()
+    message(STATUS "Found glslc: ${GLSLC}")
+    
+    # Get all shader files
+    file(GLOB SHADER_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.vert"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.frag"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.geom"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.tesc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.tese"
+    )
+    
+    if(SHADER_SOURCES)
+        foreach(SHADER ${SHADER_SOURCES})
+            get_filename_component(SHADER_NAME ${SHADER} NAME)
+            
+            # Compile shader as POST_BUILD step
+            add_custom_command(TARGET NightbloomEditor POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:NightbloomEditor>/Shaders"
+                COMMAND ${GLSLC} "${SHADER}" -o "$<TARGET_FILE_DIR:NightbloomEditor>/Shaders/${SHADER_NAME}.spv"
+                COMMENT "Compiling shader ${SHADER_NAME}"
+                VERBATIM
+            )
+        endforeach()
+        
+        message(STATUS "Found ${CMAKE_CURRENT_SOURCE_DIR}/Shaders with shaders to compile")
+    else()
+        message(STATUS "No shaders found in ${CMAKE_CURRENT_SOURCE_DIR}/Shaders")
+        
+        # Create shader directory anyway
+        add_custom_command(TARGET NightbloomEditor POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:NightbloomEditor>/Shaders"
+        )
+    endif()
+endif()
+
 # Group files in IDE
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${EDITOR_SOURCES})
