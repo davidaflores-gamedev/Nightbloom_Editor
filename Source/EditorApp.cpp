@@ -344,10 +344,13 @@ namespace Nightbloom {
 		bool m_ShowLiveShaderTest = true;
 		bool m_ShowLightingPanel = true;
 
+		bool m_ShowDebugPanel = false;
+		bool m_ComputeTestRan = false;
+
 		// Tools
 		std::unique_ptr<ShaderNodeEditor> m_ShaderNodeEditor;
 
-		bool m_ShowNoiseGenerator = false;
+		//bool m_ShowNoiseGenerator = false;
 
 		std::vector<VulkanTexture*> m_GeneratedNoiseTextures;
 
@@ -570,6 +573,26 @@ namespace Nightbloom {
 					ImGui::EndMenu();
 				}
 
+				if (ImGui::BeginMenu("Debug"))
+				{
+					if (ImGui::MenuItem("Debug Panel", nullptr, &m_ShowDebugPanel)) {}
+					ImGui::Separator();
+					if (ImGui::MenuItem("Run Compute Test"))
+					{
+						if (GetRenderer())
+						{
+							GetRenderer()->PrintComputeTestResults();
+							m_ComputeTestRan = true;
+						}
+					}
+					if (ImGui::MenuItem("Reload Shaders", "Ctrl+R"))
+					{
+						if (GetRenderer()) GetRenderer()->ReloadShaders();
+					}
+					ImGui::EndMenu();
+				}
+
+
 				if (ImGui::BeginMenu("Help"))
 				{
 					if (ImGui::MenuItem("Documentation")) { OpenDocumentation(); }
@@ -630,6 +653,7 @@ namespace Nightbloom {
 			if (m_ShowConsole) RenderConsole();
 			if (m_ShowAssetBrowser) RenderAssetBrowser();
 			if (m_ShowProjectSettings) RenderProjectSettings();
+			if (m_ShowDebugPanel) RenderDebugPanel();
 
 			if (m_ShowShaderNodeEditor && m_ShaderNodeEditor)
 			{
@@ -637,6 +661,8 @@ namespace Nightbloom {
 
 				RenderShaderCompiler();
 			}
+
+
 
 			if (m_ShowLiveShaderTest) RenderLiveShaderTest();
 
@@ -653,6 +679,66 @@ namespace Nightbloom {
 			// Demo windows
 			if (m_ShowDemoWindow) ImGui::ShowDemoWindow(&m_ShowDemoWindow);
 			if (m_ShowMetricsWindow) ImGui::ShowMetricsWindow(&m_ShowMetricsWindow);
+		}
+
+		void RenderDebugPanel()
+		{
+			ImGui::Begin("Debug Panel", &m_ShowDebugPanel);
+
+			ImGui::Text("Compute Pipeline Testing");
+			ImGui::Separator();
+
+			if (ImGui::Button("Run Compute Test", ImVec2(200, 30)))
+			{
+				if (GetRenderer())
+				{
+					GetRenderer()->PrintComputeTestResults();
+					m_ComputeTestRan = true;
+				}
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Runs a simple compute shader that multiplies 64 floats by 2.\nCheck the console/log for results.");
+			}
+
+			ImGui::Spacing();
+			ImGui::Text("The compute test:");
+			ImGui::BulletText("Input:  1, 2, 3, ... 64");
+			ImGui::BulletText("Output: 2, 4, 6, ... 128");
+
+			if (m_ComputeTestRan)
+			{
+				ImGui::Spacing();
+				ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Test executed - check console for results");
+			}
+
+			ImGui::Separator();
+			ImGui::Text("Shader Tools");
+
+			if (ImGui::Button("Reload All Shaders", ImVec2(200, 25)))
+			{
+				if (GetRenderer())
+				{
+					GetRenderer()->ReloadShaders();
+				}
+			}
+
+			if (ImGui::Button("Toggle Pipeline (P)", ImVec2(200, 25)))
+			{
+				if (GetRenderer())
+				{
+					GetRenderer()->TogglePipeline();
+				}
+			}
+
+			ImGui::Separator();
+			ImGui::Text("Memory & Performance");
+
+			// You could add more debug info here later
+			ImGui::Text("Press F3 to toggle performance overlay");
+
+			ImGui::End();
 		}
 
 		void RenderShaderCompiler()
