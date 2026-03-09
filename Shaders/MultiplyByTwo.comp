@@ -2,6 +2,13 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+// Push constants for runtime parameters
+layout(push_constant) uniform ComputePushConstants {
+    uint dataSize;      // Number of elements to process
+    float time;         // Current time for animation
+} pc;
+
+// Input/Output storage buffers
 layout(set = 0, binding = 0) readonly buffer InputBuffer {
     float inputData[];
 };
@@ -14,11 +21,13 @@ void main()
 {
     uint index = gl_GlobalInvocationID.x;
     
-    // Bounds check (good practice even if we dispatch exact count)
-    if (index >= inputData.length())
+    // Bounds check using push constant
+    if (index >= pc.dataSize)
     {
         return;
     }
     
-    outputData[index] = inputData[index] * 2.0;
+    // Multiply by 2.0 and add sin(time)
+    float timeOffset = sin(pc.time);
+    outputData[index] = inputData[index] * 2.0 + timeOffset;
 }
